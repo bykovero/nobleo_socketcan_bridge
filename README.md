@@ -29,22 +29,36 @@ The node `socketcan_bridge_ee` is also provided that uses the `EventsExecutor` t
 
 * `~/tx` ([can_msgs/Frame])
   Messages received here will be sent to the SocketCAN device.
+* `~/tx_fd` ([ros2_socketcan_msgs/FdFrame])
+  CAN FD messages received here will be sent to the SocketCAN device.
 
 #### Published Topics
 
 * `~/rx` ([can_msgs/Frame])
   Frames received on the SocketCAN device are published on this topic.
+* `~/rx_fd` ([ros2_socketcan_msgs/FdFrame])
+  CAN FD frames received on the SocketCAN device are published on this topic.
 
 #### Parameters
 
 * `interface` (default=`can0`)
   Name of the SocketCAN device, by default these devices are named can0 and upwards.
+* `enable_can_fd` (default=`false`)
+  Enable CAN FD support. When enabled, the socket is configured for CAN FD frames. When disabled, only classic CAN is used. Note: CAN FD and classic CAN are mutually exclusive on the same socket, so this parameter determines the mode for the entire interface.
 * `read_timeout` (default=`1.0`)
-  Maximum duration in seconds to wait for data on the file descriptor
+  Maximum duration in seconds to wait for data on the file descriptor.
 * `reconnect_timeout` (default=`5.0`)
-  Sleep duration in seconds before reconnecting to the SocketCAN device
+  Sleep duration in seconds before reconnecting to the SocketCAN device.
+
+#### Notes on CAN FD Mode
+
+- By default (`enable_can_fd=false`), the bridge operates in classic CAN mode and uses `~/rx` and `~/tx` topics with `can_msgs/Frame` message type (8 bytes max data).
+- To enable CAN FD support, launch with `enable_can_fd:=true`. The bridge will then use `~/rx_fd` and `~/tx_fd` topics with `ros2_socketcan_msgs/FdFrame` message type (up to 64 bytes data).
+- Setting `enable_can_fd:=true` requires the SocketCAN interface to support CAN FD. If the interface doesn't support it, a warning will be logged and the bridge will fall back to classic CAN mode.
+- Classic and CAN FD cannot be mixed on the same socket, so you must restart the node if you need to switch modes.
 
 [can_msgs/Frame]: https://github.com/ros-industrial/ros_canopen/blob/dashing-devel/can_msgs/msg/Frame.msg
+[ros2_socketcan_msgs/FdFrame]: https://github.com/autowarefoundation/ros2_socketcan/blob/main/ros2_socketcan_msgs/msg/FdFrame.msg
 
 [socketcan_bridge]: https://wiki.ros.org/socketcan_bridge
 

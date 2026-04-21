@@ -21,7 +21,9 @@ private:
 
   diagnostic_updater::Updater updater_;
   rclcpp::Publisher<can_msgs::msg::Frame>::SharedPtr can_pub;
+  rclcpp::Publisher<ros2_socketcan_msgs::msg::FdFrame>::SharedPtr can_fd_pub;
   SocketCanBridge bridge;
   rclcpp::Subscription<can_msgs::msg::Frame>::SharedPtr can_sub;
+  rclcpp::Subscription<ros2_socketcan_msgs::msg::FdFrame>::SharedPtr can_fd_sub;
 };
 }  // namespace nobleo_socketcan_bridge

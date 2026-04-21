@@ -22,6 +22,7 @@ find_package(diagnostic_updater REQUIRED)
 find_package(fmt REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(ros2_socketcan_msgs REQUIRED)
 
 add_library(socketcan_bridge_component
   src/socketcan_bridge.cpp
@@ -33,6 +34,7 @@ target_include_directories(socketcan_bridge_component PUBLIC
 target_link_libraries(socketcan_bridge_component
   ${can_msgs_TARGETS}
   ${diagnostic_msgs_TARGETS}
+  ${ros2_socketcan_msgs_TARGETS}
   diagnostic_updater::diagnostic_updater
   fmt::fmt
   rclcpp::rclcpp
@@ -85,5 +87,6 @@ ament_export_libraries(
 ament_export_targets(
   export_${PROJECT_NAME}
 )
+ament_export_dependencies(ros2_socketcan_msgs)
 
 ament_package()

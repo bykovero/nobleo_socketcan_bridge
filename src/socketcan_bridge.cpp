@@ -7,14 +7,17 @@
 #include <fmt/core.h>
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
+#include <algorithm>
 #include <linux/can.h>
 #include <linux/can/error.h>
 #include <linux/can/raw.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #include <cmath>
+#include <cstring>
 
 #include "rclcpp/logging.hpp"
 
@@ -31,13 +34,16 @@ std::ostream & operator<<(std::ostream & os, const can_msgs::msg::Frame & msg)
 
 SocketCanBridge::SocketCanBridge(
   const rclcpp::Logger & logger, rclcpp::Clock::SharedPtr clock, const std::string & interface,
-  double read_timeout, double reconnect_timeout, const CanCallback & receive_callback)
+  double read_timeout, double reconnect_timeout, bool enable_can_fd,
+  const CanCallback & receive_callback, const CanFdCallback & receive_fd_callback)
 : logger_(logger),
   clock_(clock),
   interface_(interface),
   read_timeout_(read_timeout),
   reconnect_timeout_(reconnect_timeout),
-  receive_callback_(receive_callback)
+  enable_can_fd_(enable_can_fd),
+  receive_callback_(receive_callback),
+  receive_fd_callback_(receive_fd_callback)
 {
   using std::placeholders::_1;
   receive_thread_ = std::jthread{std::bind(&SocketCanBridge::receive_loop, this, _1)};
@@ -57,10 +63,29 @@ void SocketCanBridge::send(const can_msgs::msg::Frame & msg) const
 {
   auto frame = from_msg(msg);
   RCLCPP_DEBUG_STREAM(logger_, "Sending " << msg);
-  auto n = write(socket_, &frame, sizeof(frame));
+  auto n = write(socket_, &frame, CAN_MTU);
   if (n < 0) {
     RCLCPP_ERROR_THROTTLE(
       logger_, *clock_, 5000, "Error writing to the socket: %s (%d)", strerror(errno), errno);
+  }
+  RCLCPP_DEBUG(logger_, "Wrote %zd bytes to the socket", n);
+}
+
+void SocketCanBridge::send(const ros2_socketcan_msgs::msg::FdFrame & msg) const
+{
+  if (!fd_enabled_) {
+    RCLCPP_ERROR_THROTTLE(
+      logger_, *clock_, 5000,
+      "CAN FD transmit requested but CAN FD mode is not available on this interface");
+    return;
+  }
+
+  auto frame = from_msg(msg);
+  auto n = write(socket_, &frame, CANFD_MTU);
+  if (n < 0) {
+    RCLCPP_ERROR_THROTTLE(
+      logger_, *clock_, 5000, "Error writing FD frame to the socket: %s (%d)", strerror(errno),
+      errno);
   }
   RCLCPP_DEBUG(logger_, "Wrote %zd bytes to the socket", n);
 }
@@ -102,6 +127,24 @@ void SocketCanBridge::connect()
   if (setsockopt(socket_, SOL_CAN_RAW, CAN_RAW_ERR_FILTER, &error_mask, sizeof(error_mask)) < 0) {
     RCLCPP_ERROR(logger_, "Error setting error mask");
     throw std::system_error(errno, std::generic_category());
+  }
+
+  // Only attempt CAN FD if explicitly enabled
+  if (enable_can_fd_) {
+    int enable_canfd = 1;
+    if (setsockopt(socket_, SOL_CAN_RAW, CAN_RAW_FD_FRAMES, &enable_canfd, sizeof(enable_canfd)) <
+      0)
+    {
+      fd_enabled_ = false;
+      RCLCPP_WARN(
+        logger_, "CAN FD requested but not available on interface %s: %s (%d)", interface_.c_str(),
+        strerror(errno), errno);
+    } else {
+      fd_enabled_ = true;
+      RCLCPP_INFO(logger_, "CAN FD mode enabled on interface %s", interface_.c_str());
+    }
+  } else {
+    fd_enabled_ = false;
   }
 
   ifreq ifr;
@@ -147,8 +190,8 @@ void SocketCanBridge::receive_loop(std::stop_token stoken)
 
   while (!stoken.stop_requested()) {
     RCLCPP_DEBUG(logger_, "Waiting for a CAN frame ..");
-    can_frame frame;
-    auto nbytes = read(socket_, &frame, sizeof(can_frame));
+    canfd_frame fd_frame;
+    auto nbytes = read(socket_, &fd_frame, CANFD_MTU);
     RCLCPP_DEBUG(logger_, "Received %zd bytes", nbytes);
 
     if (nbytes < 0) {
@@ -169,22 +212,35 @@ void SocketCanBridge::receive_loop(std::stop_token stoken)
       ensure_connection(stoken);
       continue;
     }
-    if (nbytes != sizeof(frame)) {
+    if (nbytes != CAN_MTU && nbytes != CANFD_MTU) {
       RCLCPP_ERROR(logger_, "Incomplete CAN frame received, skipping");
       continue;
     }
 
+    const can_frame * frame = reinterpret_cast<const can_frame *>(&fd_frame);
+
     // On error frames, update the state-struct and don't forward as ROS message
-    if (frame.can_id & CAN_ERR_FLAG) {
+    if (frame->can_id & CAN_ERR_FLAG) {
       std::scoped_lock lock(state_mtx_);
-      state_ = handle_error_frame(frame);
+      state_ = handle_error_frame(*frame);
       continue;
     }
-    auto msg = to_msg(frame);
-    msg.header.stamp = clock_->now();
 
+    if (nbytes == CANFD_MTU) {
+      auto msg = to_msg(fd_frame);
+      msg.header.stamp = clock_->now();
+      if (receive_fd_callback_) {
+        receive_fd_callback_(msg);
+      }
+      continue;
+    }
+
+    auto msg = to_msg(*frame);
+    msg.header.stamp = clock_->now();
     RCLCPP_DEBUG_STREAM(logger_, "Received " << msg);
-    receive_callback_(msg);
+    if (receive_callback_) {
+      receive_callback_(msg);
+    }
   }
   RCLCPP_INFO(logger_, "Receive loop stopped");
 }
@@ -259,6 +315,23 @@ can_frame from_msg(const can_msgs::msg::Frame & msg)
   return frame;
 }
 
+canfd_frame from_msg(const ros2_socketcan_msgs::msg::FdFrame & msg)
+{
+  canid_t id = msg.id;
+
+  if (msg.is_extended) id |= CAN_EFF_FLAG;
+  if (msg.is_error) id |= CAN_ERR_FLAG;
+
+  canfd_frame frame{};
+  frame.can_id = id;
+  const auto payload_size = static_cast<uint8_t>(
+    std::min<size_t>(std::min<uint8_t>(msg.len, CANFD_MAX_DLEN), msg.data.size()));
+  frame.len = payload_size;
+  frame.flags = 0;
+  std::copy_n(msg.data.begin(), payload_size, frame.data);
+  return frame;
+}
+
 can_msgs::msg::Frame to_msg(const can_frame & frame)
 {
   can_msgs::msg::Frame msg;
@@ -268,6 +341,19 @@ can_msgs::msg::Frame to_msg(const can_frame & frame)
   msg.id = frame.can_id & (msg.is_extended ? CAN_EFF_MASK : CAN_SFF_MASK);
   msg.dlc = frame.len;
   std::copy_n(frame.data, sizeof(frame.data), msg.data.begin());
+  return msg;
+}
+
+ros2_socketcan_msgs::msg::FdFrame to_msg(const canfd_frame & frame)
+{
+  ros2_socketcan_msgs::msg::FdFrame msg;
+  msg.is_extended = (frame.can_id & CAN_EFF_FLAG) == CAN_EFF_FLAG;
+  msg.is_error = (frame.can_id & CAN_ERR_FLAG) == CAN_ERR_FLAG;
+  msg.id = frame.can_id & (msg.is_extended ? CAN_EFF_MASK : CAN_SFF_MASK);
+  const auto payload_size = static_cast<uint8_t>(std::min<uint8_t>(frame.len, CANFD_MAX_DLEN));
+  msg.len = payload_size;
+  msg.data.resize(payload_size);
+  std::copy_n(frame.data, payload_size, msg.data.begin());
   return msg;
 }
 

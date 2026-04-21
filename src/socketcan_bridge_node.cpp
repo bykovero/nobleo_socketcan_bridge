@@ -14,12 +14,18 @@ SocketCanBridgeNode::SocketCanBridgeNode(const rclcpp::NodeOptions & options)
 : rclcpp::Node("socketcan_bridge", options),
   updater_(this),
   can_pub(this->create_publisher<can_msgs::msg::Frame>("~/rx", 100)),
+  can_fd_pub(this->create_publisher<ros2_socketcan_msgs::msg::FdFrame>("~/rx_fd", 100)),
   bridge(
     this->get_logger(), this->get_clock(), this->declare_parameter("interface", "can0"),
     this->declare_parameter("read_timeout", 1.0), this->declare_parameter("reconnect_timeout", 5.0),
-    [this](const can_msgs::msg::Frame & msg) { can_pub->publish(msg); }),
+    this->declare_parameter("enable_can_fd", false),
+    [this](const can_msgs::msg::Frame & msg) { can_pub->publish(msg); },
+    [this](const ros2_socketcan_msgs::msg::FdFrame & msg) { can_fd_pub->publish(msg); }),
   can_sub(this->create_subscription<can_msgs::msg::Frame>(
-    "~/tx", 100, [this](can_msgs::msg::Frame::ConstSharedPtr msg) { bridge.send(*msg); }))
+    "~/tx", 100, [this](can_msgs::msg::Frame::ConstSharedPtr msg) { bridge.send(*msg); })),
+  can_fd_sub(this->create_subscription<ros2_socketcan_msgs::msg::FdFrame>(
+    "~/tx_fd", 100,
+    [this](ros2_socketcan_msgs::msg::FdFrame::ConstSharedPtr msg) { bridge.send(*msg); }))
 {
   updater_.setHardwareID("SocketCan");
   updater_.add("SocketCan", [this](auto & stat) { this->produceDiagnostics(stat); });
