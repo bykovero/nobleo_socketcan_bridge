@@ -20,6 +20,7 @@ private:
   void produceDiagnostics(diagnostic_updater::DiagnosticStatusWrapper & status);
 
   diagnostic_updater::Updater updater_;
+  bool enable_can_fd_;
   rclcpp::Publisher<can_msgs::msg::Frame>::SharedPtr can_pub;
   rclcpp::Publisher<ros2_socketcan_msgs::msg::FdFrame>::SharedPtr can_fd_pub;
   SocketCanBridge bridge;

@@ -27,17 +27,15 @@ The node `socketcan_bridge_ee` is also provided that uses the `EventsExecutor` t
 
 #### Subscribed Topics
 
-* `~/tx` ([can_msgs/Frame])
-  Messages received here will be sent to the SocketCAN device.
-* `~/tx_fd` ([ros2_socketcan_msgs/FdFrame])
-  CAN FD messages received here will be sent to the SocketCAN device.
+* `~/tx` (type depends on `enable_can_fd`)
+  When `enable_can_fd=false`: [can_msgs/Frame]
+  When `enable_can_fd=true`: [ros2_socketcan_msgs/FdFrame]
 
 #### Published Topics
 
-* `~/rx` ([can_msgs/Frame])
-  Frames received on the SocketCAN device are published on this topic.
-* `~/rx_fd` ([ros2_socketcan_msgs/FdFrame])
-  CAN FD frames received on the SocketCAN device are published on this topic.
+* `~/rx` (type depends on `enable_can_fd`)
+  When `enable_can_fd=false`: [can_msgs/Frame]
+  When `enable_can_fd=true`: [ros2_socketcan_msgs/FdFrame]
 
 #### Parameters
 
@@ -53,7 +51,7 @@ The node `socketcan_bridge_ee` is also provided that uses the `EventsExecutor` t
 #### Notes on CAN FD Mode
 
 - By default (`enable_can_fd=false`), the bridge operates in classic CAN mode and uses `~/rx` and `~/tx` topics with `can_msgs/Frame` message type (8 bytes max data).
-- To enable CAN FD support, launch with `enable_can_fd:=true`. The bridge will then use `~/rx_fd` and `~/tx_fd` topics with `ros2_socketcan_msgs/FdFrame` message type (up to 64 bytes data).
+- To enable CAN FD support, launch with `enable_can_fd:=true`. The bridge will use the same `~/rx` and `~/tx` topic names, but with `ros2_socketcan_msgs/FdFrame` message type (up to 64 bytes data).
 - Setting `enable_can_fd:=true` requires the SocketCAN interface to support CAN FD. If the interface doesn't support it, a warning will be logged and the bridge will fall back to classic CAN mode.
 - Classic and CAN FD cannot be mixed on the same socket, so you must restart the node if you need to switch modes.
 
